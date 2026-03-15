@@ -1,34 +1,30 @@
 const supabase = require("../supabaseClient");
 
 const logger = (req, res, next) => {
-
-  console.log("Logger middleware triggered");
-
   const start = Date.now();
 
   res.on("finish", async () => {
-
     const responseTime = Date.now() - start;
 
-    console.log("Attempting to insert log...");
-
-    const { data, error } = await supabase
-      .from("api_logs")
-      .insert([
-        {
+    try {
+      const { error } = await supabase
+        .from("api_logs")
+        .insert({
           endpoint: req.originalUrl,
           method: req.method,
           status_code: res.statusCode,
-          response_time: responseTime
-        }
-      ]);
+          response_time: responseTime,
+          ip_address: req.ip,
+          created_at: new Date().toISOString()
+        });
 
-    if (error) {
-      console.error("Supabase insert error:", error);
-    } else {
-      console.log("Log inserted successfully");
+      if (error) {
+        console.error("Supabase log error:", error.message);
+      }
+
+    } catch (err) {
+      console.error("Logger middleware error:", err.message);
     }
-
   });
 
   next();
