@@ -2,135 +2,141 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../supabaseClient");
 
+const safeQuery = async (query) => {
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+};
 
-// API Traffic
-router.get("/traffic", async (req,res)=>{
+router.get("/traffic", async (req, res) => {
+  try {
+    const data = await safeQuery(
+      supabase.from("api_logs").select("endpoint")
+    );
 
- const { data } = await supabase
-   .from("api_logs")
-   .select("endpoint");
+    const counts = {};
 
- const counts = {};
+    data.forEach(({ endpoint }) => {
+      if (!endpoint) return;
+      counts[endpoint] = (counts[endpoint] || 0) + 1;
+    });
 
- data.forEach(row=>{
-   counts[row.endpoint] = (counts[row.endpoint] || 0) + 1;
- });
+    const result = Object.entries(counts).map(([endpoint, requests]) => ({
+      endpoint,
+      requests
+    }));
 
- const result = Object.keys(counts).map(key=>({
-   endpoint:key,
-   requests:counts[key]
- }));
+    res.status(200).json(result);
 
- res.json(result);
-
+  } catch (err) {
+    console.error("Traffic error:", err.message);
+    res.status(500).json({ error: "Failed to fetch traffic data" });
+  }
 });
+router.get("/slow", async (req, res) => {
+  try {
+    const data = await safeQuery(
+      supabase
+        .from("api_logs")
+        .select("*")
+        .gt("response_time", 500)
+        .order("response_time", { ascending: false })
+        .limit(50)
+    );
 
+    res.status(200).json(data);
 
-// Slow APIs
-router.get("/slow", async (req,res)=>{
-
- const { data } = await supabase
-   .from("api_logs")
-   .select("*")
-   .gt("response_time",500);
-
- res.json(data);
-
+  } catch (err) {
+    console.error("Slow API error:", err.message);
+    res.status(500).json({ error: "Failed to fetch slow APIs" });
+  }
 });
+router.get("/latency", async (req, res) => {
+  try {
+    const data = await safeQuery(
+      supabase
+        .from("api_logs")
+        .select("endpoint,response_time")
+    );
 
+    const result = {};
 
-// API Latency (Average Response Time)
-router.get("/latency", async (req,res)=>{
+    data.forEach(({ endpoint, response_time }) => {
+      if (!endpoint || response_time == null) return;
 
- const { data, error } = await supabase
-   .from("api_logs")
-   .select("endpoint,response_time");
+      if (!result[endpoint]) {
+        result[endpoint] = { total: 0, count: 0 };
+      }
 
- if(error) return res.status(500).json(error);
+      result[endpoint].total += response_time;
+      result[endpoint].count += 1;
+    });
 
- const result = {};
+    const avgLatency = Object.entries(result).map(([endpoint, v]) => ({
+      endpoint,
+      latency: Math.round(v.total / v.count)
+    }));
 
- data.forEach(row=>{
-   if(!result[row.endpoint]){
-     result[row.endpoint] = [];
-   }
-   result[row.endpoint].push(row.response_time);
- });
+    res.status(200).json(avgLatency);
 
- const avgLatency = Object.keys(result).map(endpoint=>{
-   const avg =
-     result[endpoint].reduce((a,b)=>a+b,0) / result[endpoint].length;
-
-   return {
-     endpoint,
-     latency: Math.round(avg)
-   };
- });
-
- res.json(avgLatency);
-
+  } catch (err) {
+    console.error("Latency error:", err.message);
+    res.status(500).json({ error: "Failed to calculate latency" });
+  }
 });
+router.get("/rpm", async (req, res) => {
+  try {
+    const data = await safeQuery(
+      supabase
+        .from("api_logs")
+        .select("created_at")
+    );
 
+    const counts = {};
 
-// Requests Per Minute
-router.get("/rpm", async (req,res)=>{
+    data.forEach(({ created_at }) => {
+      if (!created_at) return;
 
- const { data, error } = await supabase
-   .from("api_logs")
-   .select("created_at");
+      const minute = new Date(created_at)
+        .toISOString()
+        .slice(0, 16);
 
- if(error) return res.status(500).json(error);
+      counts[minute] = (counts[minute] || 0) + 1;
+    });
 
- const counts = {};
+    const result = Object.entries(counts)
+      .map(([time, requests]) => ({ time, requests }))
+      .sort((a, b) => a.time.localeCompare(b.time)); // FIX: sorting
 
- data.forEach(row=>{
-   const minute = new Date(row.created_at)
-     .toISOString()
-     .slice(0,16);
+    res.status(200).json(result);
 
-   counts[minute] = (counts[minute] || 0) + 1;
- });
-
- const result = Object.keys(counts).map(time=>({
-   time,
-   requests:counts[time]
- }));
-
- res.json(result);
-
+  } catch (err) {
+    console.error("RPM error:", err.message);
+    res.status(500).json({ error: "Failed to calculate RPM" });
+  }
 });
+router.get("/errors", async (req, res) => {
+  try {
+    const data = await safeQuery(
+      supabase
+        .from("api_logs")
+        .select("status_code")
+    );
 
+    let success = 0;
+    let errors = 0;
 
-// Error Rate
-router.get("/errors", async (req,res)=>{
+    data.forEach(({ status_code }) => {
+      if (status_code >= 200 && status_code < 400) success++;
+      else if (status_code >= 400) errors++;
+    });
 
- const { data, error } = await supabase
-   .from("api_logs")
-   .select("status_code");
+    res.status(200).json({ success, errors });
 
- if(error) return res.status(500).json(error);
-
- let success = 0;
- let errors = 0;
-
- data.forEach(row=>{
-
-   if(row.status_code >= 200 && row.status_code < 400){
-     success++;
-   }
-
-   else if(row.status_code >= 400){
-     errors++;
-   }
-
- });
-
- res.json({
-   success,
-   errors
- });
-
+  } catch (err) {
+    console.error("Error rate error:", err.message);
+    res.status(500).json({ error: "Failed to calculate error rate" });
+  }
 });
-
 
 module.exports = router;
