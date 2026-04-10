@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import API from "../services/api";
 import { Bar, Line, Pie } from "react-chartjs-2";
+
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -25,6 +26,7 @@ ChartJS.register(
 );
 
 function Dashboard() {
+
   const [data, setData] = useState({
     traffic: [],
     logs: [],
@@ -35,7 +37,9 @@ function Dashboard() {
   });
 
   const [loading, setLoading] = useState(true);
-  const fetchAll = async () => {
+  const [error, setError] = useState(null);
+
+  const fetchAll = async (isMounted) => {
     try {
       const [
         trafficRes,
@@ -53,6 +57,8 @@ function Dashboard() {
         API.get("/analytics/errors")
       ]);
 
+      if (!isMounted.current) return;
+
       setData({
         traffic: trafficRes.data || [],
         logs: logsRes.data || [],
@@ -62,70 +68,82 @@ function Dashboard() {
         errors: errorRes.data || {}
       });
 
+      setError(null);
+
     } catch (err) {
       console.error("API Error:", err);
+      setError("Failed to load dashboard data");
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
-  useEffect(() => {
-    fetchAll();
 
-    const interval = setInterval(fetchAll, 5000);
-    return () => clearInterval(interval);
+  useEffect(() => {
+    const isMounted = { current: true };
+
+    fetchAll(isMounted);
+
+    const interval = setInterval(() => {
+      fetchAll(isMounted);
+    }, 5000);
+
+    return () => {
+      isMounted.current = false;
+      clearInterval(interval);
+    };
   }, []);
-  const {
-    traffic,
-    logs,
-    slowApis,
-    latency,
-    rpm,
-    errors
-  } = data;
-  const barData = {
-    labels: traffic?.map(x => x.endpoint) || [],
+
+  const { traffic, logs, slowApis, latency, rpm, errors } = data;
+
+  const barData = useMemo(() => ({
+    labels: traffic.map(x => x.endpoint),
     datasets: [{
       label: "Requests",
-      data: traffic?.map(x => x.requests) || [],
+      data: traffic.map(x => x.requests),
       backgroundColor: "#3b82f6"
     }]
-  };
+  }), [traffic]);
 
-  const latencyTrend = {
-    labels: logs?.map(x => x.endpoint) || [],
+  const latencyTrend = useMemo(() => ({
+    labels: logs.map((_, i) => i), 
     datasets: [{
-      label: "Response Time",
-      data: logs?.map(x => x.response_time) || [],
-      borderColor: "#10b981"
+      label: "Response Time (ms)",
+      data: logs.map(x => x.response_time),
+      borderColor: "#10b981",
+      fill: false
     }]
-  };
+  }), [logs]);
 
-  const avgLatencyChart = {
-    labels: latency?.map(x => x.endpoint) || [],
+  const avgLatencyChart = useMemo(() => ({
+    labels: latency.map(x => x.endpoint),
     datasets: [{
-      label: "Avg Latency",
-      data: latency?.map(x => x.latency) || [],
+      label: "Avg Latency (ms)",
+      data: latency.map(x => x.latency),
       backgroundColor: "#f59e0b"
     }]
-  };
+  }), [latency]);
 
-  const rpmChart = {
-    labels: rpm?.map(x => x.time) || [],
+  const rpmChart = useMemo(() => ({
+    labels: rpm.map(x => x.time),
     datasets: [{
-      label: "RPM",
-      data: rpm?.map(x => x.requests) || [],
-      borderColor: "#8b5cf6"
+      label: "Requests Per Minute",
+      data: rpm.map(x => x.requests),
+      borderColor: "#8b5cf6",
+      fill: false
     }]
-  };
+  }), [rpm]);
 
-  const errorChart = {
+  const errorChart = useMemo(() => ({
     labels: ["Success", "Errors"],
     datasets: [{
-      data: [errors?.success || 0, errors?.errors || 0],
+      data: [errors.success || 0, errors.errors || 0],
       backgroundColor: ["#22c55e", "#ef4444"]
     }]
-  };
+  }), [errors]);
+
   if (loading) return <h2>Loading dashboard...</h2>;
+
+  if (error) return <h2 style={{ color: "red" }}>{error}</h2>;
 
   return (
     <div className="dashboard">
@@ -179,8 +197,8 @@ function Dashboard() {
         </thead>
 
         <tbody>
-          {logs.slice(0, 10).map(log => (
-            <tr key={log.id || `${log.endpoint}-${log.timestamp}`}>
+          {logs.slice(0, 10).map((log, i) => (
+            <tr key={log.request_id || i}>
               <td>{log.endpoint}</td>
               <td>{log.method}</td>
               <td>{log.status_code}</td>
